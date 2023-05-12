@@ -11,8 +11,8 @@ boolean inErrorState = false;
 #define DATAPIN A0
 #define STRIPSIZE 6
 
-const uint8_t step = 10;
-const int phaseBy = 95;
+const uint8_t step = 5;
+const int phaseBy = 60;
 const int ringLength = STRIPSIZE - 1;
 const int resolution = 360;
 const int weightThreashold = 50;
@@ -104,9 +104,8 @@ void loop() {
 
   uint32_t colorArr[resolution];
 
-  
   boolean newDataReady = false;
-  unsigned int serialPrintInterval = 2750; // increase value to slow down serial print activity
+  unsigned int serialPrintInterval = 1500; // increase value to slow down serial print activity
 
   // check for new data/start next conversion:
   if (LoadCell.update()) newDataReady = true;
@@ -148,11 +147,20 @@ void loop() {
   }
 
   //Start lightning
-  for (int indx = 0; indx < resolution; indx++) {
-    uint32_t newColor = colorArr[indx];
-    // Serial.print(indx); Serial.print("-"); Serial.println(newColor);
-    SetFillColor(newColor);
-    delay(2);
+  strip.setPixelColor(STRIPSIZE - 1, strip.gamma32(origColor));
+  int ledPhase = phaseBy; //resolution / (STRIPSIZE - 1);
+  for (int indx = 0; indx < resolution; indx=indx+step) {
+    int runningIndx = indx;
+    for (int led=0; led < STRIPSIZE-1; led++) {
+      uint32_t newColor = colorArr[runningIndx];
+      // Serial.print(runningIndx); Serial.print(" ");
+      strip.setPixelColor(led, strip.gamma32(newColor));
+      runningIndx += ledPhase;
+      runningIndx = runningIndx % resolution;
+    }
+    strip.show();
+    Serial.println();
+    delay(25);
   }
   // Serial.println();
 }
