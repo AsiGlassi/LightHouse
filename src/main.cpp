@@ -6,8 +6,10 @@
 #endif
 #define debug false
 
+boolean inErrorState = false;
+
 #define DATAPIN A0
-#define STRIPSIZE 1
+#define STRIPSIZE 6
 
 const uint8_t step = 10;
 const int phaseBy = 95;
@@ -25,7 +27,8 @@ const int weightThreashold = 50;
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(STRIPSIZE, DATAPIN, NEO_GRB + NEO_KHZ800);
 
 uint32_t redColor = (0xAE0649);
-uint32_t greenColor = (0x33cc33);
+uint32_t greenColor = (0x33CC33);
+uint32_t errorColor = (0xAA0000);
 uint32_t origColor = (0x1AB2E7);
 uint32_t lastColor = origColor;
 
@@ -41,13 +44,20 @@ void SetFillColor(uint32_t color) {
   strip.show();
 }
 
+void SetErrorState (){
+  inErrorState = true;
+  SetFillColor(errorColor);
+  delay(500);
+  exit(-1);
+}
+
 void setup() {
   Serial.begin(57600);
   Serial.println("Or Light House");
 
   strip.begin();
   strip.setBrightness(75); // Lower brightness and save eyeballs!
-  strip.setPixelColor(STRIPSIZE-1, strip.gamma32(origColor));
+  SetFillColor(origColor);
   strip.show();            // Initialize all pixels to 'off'}
 
   float calibrationValue;   // calibration value
@@ -63,7 +73,8 @@ void setup() {
   boolean _tare = true;                 // set this to false if you don't want tare to be performed in the next step
   LoadCell.start(stabilizingtime, _tare);
   if (LoadCell.getTareTimeoutFlag()) {
-    Serial.println("Timeout");//, check HX711 wiring and pin"); 
+    Serial.println("Timeout!");//, check HX711 wiring and pin"); 
+    SetErrorState();
   } else {
     LoadCell.setCalFactor(calibrationValue); // set calibration factor (float)
     Serial.println("Startup is completed");
@@ -79,18 +90,21 @@ void setup() {
   // Serial.println(LoadCell.getSettlingTime());
   // // Serial.println("Note that the settling time may increase significantly if you use delay() in your sketch!");
   if (LoadCell.getSPS() < 7) {
-    Serial.print("Sampling rate < spec");//, check HX711 wiring and pin"); 
+    Serial.print("Sampling rate < spec!");//, check HX711 wiring and pin"); 
+    SetErrorState();
   } else if (LoadCell.getSPS() > 100) {
-    Serial.print("Sampling rate > spec");//, check HX711 wiring and pin"); 
+    Serial.print("Sampling rate > spec!");//, check HX711 wiring and pin"); 
+    SetErrorState();
   }
   delay(50);
 }
 
 
 void loop() {
-  
-  uint32_t colorArr[365];
 
+  uint32_t colorArr[resolution];
+
+  
   boolean newDataReady = false;
   unsigned int serialPrintInterval = 2750; // increase value to slow down serial print activity
 
