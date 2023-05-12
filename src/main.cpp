@@ -13,7 +13,7 @@ const uint8_t step = 10;
 const int phaseBy = 95;
 const int ringLength = STRIPSIZE - 1;
 const int resolution = 360;
-// uint32_t colorArr[resolution];
+const int weightThreashold = 50;
 
 // Parameter 1 = number of pixels in strip
 // Parameter 2 = pin number (most are valid)
@@ -27,18 +27,18 @@ Adafruit_NeoPixel strip = Adafruit_NeoPixel(STRIPSIZE, DATAPIN, NEO_GRB + NEO_KH
 uint32_t redColor = (0xAE0649);
 uint32_t greenColor = (0x33cc33);
 uint32_t origColor = (0x1AB2E7);
+uint32_t lastColor = origColor;
 
 const int HX711_dout = 5; // mcu > HX711 dout pin, must be external interrupt capable!
 const int HX711_sck = 4;  // mcu > HX711 sck pin
 HX711_ADC LoadCell(HX711_dout, HX711_sck);
 const int calVal_eepromAdress = 0;
-long lastTime = 0;
+unsigned long lastTime = 0;
 
 // set all pixel to the same color
 void SetFillColor(uint32_t color) {
   strip.fill((strip.gamma32(color)));
   strip.show();
-  // delay(2);
 }
 
 void setup() {
@@ -47,6 +47,7 @@ void setup() {
 
   strip.begin();
   strip.setBrightness(75); // Lower brightness and save eyeballs!
+  strip.setPixelColor(STRIPSIZE-1, strip.gamma32(origColor));
   strip.show();            // Initialize all pixels to 'off'}
 
   float calibrationValue;   // calibration value
@@ -58,16 +59,15 @@ void setup() {
 
   LoadCell.begin();
   LoadCell.setReverseOutput();
-  unsigned long stabilizingtime = 2000; // tare preciscion can be improved by adding a few seconds of stabilizing time
+  unsigned long stabilizingtime = 1000; // tare preciscion can be improved by adding a few seconds of stabilizing time
   boolean _tare = true;                 // set this to false if you don't want tare to be performed in the next step
   LoadCell.start(stabilizingtime, _tare);
-  char checkStr[] = "check HX711 wiring and pin";
   if (LoadCell.getTareTimeoutFlag()) {
-    Serial.print("Timeout, ");Serial.println(checkStr);
+    Serial.println("Timeout");//, check HX711 wiring and pin"); 
   } else {
     LoadCell.setCalFactor(calibrationValue); // set calibration factor (float)
-    // Serial.println("Startup is complete");
-}
+    Serial.println("Startup is completed");
+  }
   while (!LoadCell.update());
   // Serial.print("Cal val: ");
   // Serial.println(LoadCell.getCalFactor());
@@ -79,9 +79,9 @@ void setup() {
   // Serial.println(LoadCell.getSettlingTime());
   // // Serial.println("Note that the settling time may increase significantly if you use delay() in your sketch!");
   if (LoadCell.getSPS() < 7) {
-    Serial.print("Sampling rate < spec, "); Serial.println(checkStr);
+    Serial.print("Sampling rate < spec");//, check HX711 wiring and pin"); 
   } else if (LoadCell.getSPS() > 100) {
-    Serial.print("Sampling rate > spec, "); Serial.println(checkStr);
+    Serial.print("Sampling rate > spec");//, check HX711 wiring and pin"); 
   }
   delay(50);
 }
@@ -92,48 +92,53 @@ void loop() {
   uint32_t colorArr[365];
 
   boolean newDataReady = false;
-  int serialPrintInterval = 750; // increase value to slow down serial print activity
+  unsigned int serialPrintInterval = 2750; // increase value to slow down serial print activity
 
   // check for new data/start next conversion:
   if (LoadCell.update()) newDataReady = true;
 
   // get smoothed value from the dataset:
+  boolean statusChanged = false;
   if (newDataReady) {
-    // if (millis() > lastTime + serialPrintInterval) {
-  //     // float weight = LoadCell.getData();
-  //     // int weight = int(i);
-  //     // Serial.print("Load_cell output val: "); Serial.println(weight);
-  //     // if (weight > 200) {
-  //     //   origColor = redColor;
-  //     // } else {
-  //     //   origColor = greenColor;
-  //     // }
-      // lastTime = millis();
-    // }
+    if (millis() > lastTime + serialPrintInterval) {
+      float weight = LoadCell.getData();
+      Serial.print("Weight: "); Serial.println(weight);
+      if (weight > weightThreashold) {
+        origColor = redColor;
+      } else {
+        origColor = greenColor;
+      }
+      lastTime = millis();
+
+      statusChanged = (lastColor != origColor);
+      lastColor = origColor;
+    }
   }
 
-  uint16_t curr_r, curr_g, curr_b; // separate into RGB components
-  curr_b = origColor & 0x00FF;
-  curr_g = (origColor >> 8) & 0x00FF;
-  curr_r = (origColor >> 16) & 0x00FF;
+  //rebuild color table
+  if (statusChanged) {
+    Serial.println("S C.");
 
-  // Set array with one cycle color
-  for (int indx = 0; indx < resolution; indx++) {
-    float sinRes = sin((indx - 90) * PI / 180);
-    if (sinRes < 0) {sinRes = 0;}
-    uint32_t newColor = (uint32_t)(sinRes * curr_b) + ((uint32_t)(sinRes * curr_g) << 8) + ((uint32_t)(sinRes * curr_r) << 16);
-    colorArr[indx] = newColor;
+    uint16_t curr_r, curr_g, curr_b; // separate into RGB components
+    curr_b = origColor & 0x00FF;
+    curr_g = (origColor >> 8) & 0x00FF;
+    curr_r = (origColor >> 16) & 0x00FF;
+
+    // Set array with one cycle color
+    for (int indx = 0; indx < resolution; indx++) {
+      float sinRes = sin((indx - 90) * PI / 180);
+      if (sinRes < 0) {sinRes = 0;}
+      uint32_t newColor = (uint32_t)(sinRes * curr_b) + ((uint32_t)(sinRes * curr_g) << 8) + ((uint32_t)(sinRes * curr_r) << 16);
+      colorArr[indx] = newColor;
+    }
   }
 
-  // int led = 1;
-  // Serial.println("Start cycle");
-  // Serial.println("Start Paint");
-
+  //Start lightning
   for (int indx = 0; indx < resolution; indx++) {
     uint32_t newColor = colorArr[indx];
-    Serial.print(indx); Serial.print("-"); Serial.println(newColor);
+    // Serial.print(indx); Serial.print("-"); Serial.println(newColor);
     SetFillColor(newColor);
-    delay(10);
+    delay(2);
   }
-  Serial.println();
+  // Serial.println();
 }
