@@ -2,7 +2,7 @@
 #include <Adafruit_NeoPixel.h>
 #include "HX711_ADC.h"
 #if defined(ESP8266) || defined(ESP32) || defined(AVR)
-// #include <EEPROM.h>
+#include <EEPROM.h>
 #endif
 #define debug false
 
@@ -15,6 +15,9 @@ const uint8_t step = 5;
 const int phaseBy = 60;
 const int ringLength = STRIPSIZE - 1;
 const int resolution = 360;
+
+// #define LB2KG 0.45352
+const float knownMass = 2000;
 const int weightThreashold = 50;
 
 // Parameter 1 = number of pixels in strip
@@ -30,6 +33,9 @@ uint32_t redColor = (0xAE0649);
 uint32_t greenColor = (0x33CC33);
 uint32_t errorColor = (0xAA0000);
 uint32_t origColor = (0x1AB2E7);
+uint32_t calP1Color = (0xFFFF00);
+uint32_t calP2Color = (0xFFFFAA);
+
 uint32_t lastColor = origColor;
 
 const int HX711_dout = 5; // mcu > HX711 dout pin, must be external interrupt capable!
@@ -44,7 +50,7 @@ void SetFillColor(uint32_t color) {
   strip.show();
 }
 
-void SetErrorState (){
+void SetErrorState () {
   inErrorState = true;
   SetFillColor(errorColor);
   delay(500);
@@ -55,30 +61,84 @@ void setup() {
   Serial.begin(57600);
   Serial.println("Or Light House");
 
+  //Led init
   strip.begin();
   strip.setBrightness(75); // Lower brightness and save eyeballs!
   SetFillColor(origColor);
   strip.show();            // Initialize all pixels to 'off'}
 
-  float calibrationValue;   // calibration value
-  calibrationValue = 696.0; // uncomment this if you want to set this value in the sketch
-#if defined(ESP8266) || defined(ESP32)
-  // EEPROM.begin(512); // uncomment this if you use ESP8266 and want to fetch this value from eeprom
-#endif
-  // EEPROM.get(calVal_eepromAdress, calibrationValue); // uncomment this if you want to fetch this value from eeprom
-
+  //Sacle Init
   LoadCell.begin();
   LoadCell.setReverseOutput();
   unsigned long stabilizingtime = 1000; // tare preciscion can be improved by adding a few seconds of stabilizing time
-  boolean _tare = true;                 // set this to false if you don't want tare to be performed in the next step
-  LoadCell.start(stabilizingtime, _tare);
-  if (LoadCell.getTareTimeoutFlag()) {
+  LoadCell.start(stabilizingtime, false);
+  if (LoadCell.getTareTimeoutFlag() || LoadCell.getSignalTimeoutFlag()) {
     Serial.println("Timeout!");//, check HX711 wiring and pin"); 
     SetErrorState();
-  } else {
-    LoadCell.setCalFactor(calibrationValue); // set calibration factor (float)
-    Serial.println("Startup is completed");
   }
+
+  byte calInfoExist = 0x00;
+  uint32_t calibrationOffset = 0x000000;   // offset value
+  float calibrationValue = 696.0;   // calibration value
+  LoadCell.setCalFactor(calibrationValue);
+
+  //try to get calibration info from eprom
+#if defined(ESP8266) || defined(ESP32)
+  EEPROM.begin(512); // uncomment this if you use ESP8266 and want to fetch this value from eeprom
+#endif
+  int read_eepromAdress = calVal_eepromAdress;
+  EEPROM.get(read_eepromAdress, calInfoExist); 
+  if (calInfoExist != 0x01) {
+
+    //Configuration Not Exist --> Set Cal Mode
+    strip.fill((strip.gamma32(calP1Color)));
+    Serial.println("No Data in EEPROM --> Calibration Starts, Remove load !");
+    delay(10000);
+
+    //Phase 1 - set to Zero
+    LoadCell.tareNoDelay(); // calculate the new tare / zero offset value (blocking)
+    calibrationOffset = LoadCell.getTareOffset(); // get the new tare / zero offset value
+
+calibrationOffset=0x112233;
+
+    //Phaase 2 - measure 3kg weight
+    strip.fill((strip.gamma32(calP2Color)));
+    Serial.println("Put a known Weight - 2kg !");
+    delay(10000);
+
+    //get the new calibration value
+    LoadCell.refreshDataSet();  //refresh the dataset to be sure that the known mass is measured correct
+    float newCalibrationValue = LoadCell.getNewCalibration(knownMass); 
+
+    //save data in eeprom
+    Serial.println("Writing new Data to EEPROM:");
+    Serial.print("Offset = "); Serial.println(calibrationOffset);
+    Serial.print("Calibration Factor = "); Serial.println(calibrationValue);
+
+    int write_eepromAdress = calVal_eepromAdress;
+    EEPROM.put(write_eepromAdress, 0x01);                 // Cal exist
+    read_eepromAdress += 0x01;
+    EEPROM.put(write_eepromAdress, calibrationOffset);    // New tare offest - uint32_t
+    read_eepromAdress += sizeof(uint32_t);
+    EEPROM.put(write_eepromAdress, newCalibrationValue);  // New Cal - float
+#if defined(ESP8266) || defined(ESP32)
+    EEPROM.commit();
+#endif
+  
+    LoadCell.setTareOffset(calibrationOffset); 
+    LoadCell.setCalFactor(newCalibrationValue);
+  }
+
+  read_eepromAdress += 0x01;
+  EEPROM.get(read_eepromAdress, calibrationOffset); // New tare offest - uint32_t 
+  read_eepromAdress += sizeof(uint32_t);
+  EEPROM.get(read_eepromAdress, calibrationValue);  // New Cal - float 
+  Serial.println("Read Offset = " + String(calibrationOffset));
+  Serial.println("Read Calibration Factor = " + String(calibrationValue));
+  LoadCell.setTareOffset(calibrationOffset);
+  LoadCell.setCalFactor(calibrationValue);
+  Serial.println("Startup is completed");
+  
   while (!LoadCell.update());
   // Serial.print("Cal val: ");
   // Serial.println(LoadCell.getCalFactor());
@@ -130,7 +190,7 @@ void loop() {
 
   //rebuild color table
   if (statusChanged) {
-    Serial.println("S C.");
+    Serial.println("Status C.");
 
     uint16_t curr_r, curr_g, curr_b; // separate into RGB components
     curr_b = origColor & 0x00FF;
@@ -159,7 +219,7 @@ void loop() {
       runningIndx = runningIndx % resolution;
     }
     strip.show();
-    Serial.println();
+    // Serial.println();
     delay(25);
   }
   // Serial.println();
