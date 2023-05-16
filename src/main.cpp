@@ -17,8 +17,8 @@ const int ringLength = STRIPSIZE - 1;
 const int resolution = 360;
 
 // #define LB2KG 0.45352
-const float knownMass = 2000;
-const int weightThreashold = 50;
+const float knownMass = 20.0f;
+const float weightThreashold = 50.0f;
 
 // Parameter 1 = number of pixels in strip
 // Parameter 2 = pin number (most are valid)
@@ -41,8 +41,8 @@ uint32_t lastColor = origColor;
 const int HX711_dout = 5; // mcu > HX711 dout pin, must be external interrupt capable!
 const int HX711_sck = 4;  // mcu > HX711 sck pin
 HX711_ADC LoadCell(HX711_dout, HX711_sck);
-const int calVal_eepromAdress = 0;
 unsigned long lastTime = 0;
+unsigned int serialPrintInterval = 1500; // increase value to slow down serial print activity
 
 // set all pixel to the same color
 void SetFillColor(uint32_t color) {
@@ -76,68 +76,77 @@ void setup() {
     Serial.println("Timeout!");//, check HX711 wiring and pin"); 
     SetErrorState();
   }
+  
+  int eeAddress = 0;
+  byte calibInfoExist = 0x01;
+  float calibrationValue = 696.0f;  
+  int offsetValue = 0;
 
-  byte calInfoExist = 0x00;
-  uint32_t calibrationOffset = 0x000000;   // offset value
-  float calibrationValue = 696.0;   // calibration value
   LoadCell.setCalFactor(calibrationValue);
 
   //try to get calibration info from eprom
 #if defined(ESP8266) || defined(ESP32)
-  EEPROM.begin(512); // uncomment this if you use ESP8266 and want to fetch this value from eeprom
+  EEPROM.begin(512); 
 #endif
-  int read_eepromAdress = calVal_eepromAdress;
-  EEPROM.get(read_eepromAdress, calInfoExist); 
-  if (calInfoExist != 0x01) {
+  EEPROM.get(eeAddress, calibInfoExist);
+  Serial.print("calibInfoExist "); Serial.println(calibInfoExist); 
+  eeAddress += sizeof(byte);
+  if (calibInfoExist != 0x01) {
 
     //Configuration Not Exist --> Set Cal Mode
     strip.fill((strip.gamma32(calP1Color)));
     Serial.println("No Data in EEPROM --> Calibration Starts, Remove load !");
-    delay(10000);
+    delay(5000);
 
     //Phase 1 - set to Zero
     LoadCell.tareNoDelay(); // calculate the new tare / zero offset value (blocking)
-    calibrationOffset = LoadCell.getTareOffset(); // get the new tare / zero offset value
-
-calibrationOffset=0x112233;
+    offsetValue = LoadCell.getTareOffset(); // get the new tare / zero offset value
 
     //Phaase 2 - measure 3kg weight
-    strip.fill((strip.gamma32(calP2Color)));
+    strip.fill(strip.gamma32(calP2Color));
     Serial.println("Put a known Weight - 2kg !");
-    delay(10000);
+    delay(5000);
 
     //get the new calibration value
     LoadCell.refreshDataSet();  //refresh the dataset to be sure that the known mass is measured correct
-    float newCalibrationValue = LoadCell.getNewCalibration(knownMass); 
+    // calibrationValue = LoadCell.getNewCalibration(knownMass); 
 
     //save data in eeprom
     Serial.println("Writing new Data to EEPROM:");
-    Serial.print("Offset = "); Serial.println(calibrationOffset);
-    Serial.print("Calibration Factor = "); Serial.println(calibrationValue);
+    Serial.print("Offset = "); Serial.println(offsetValue);
+    Serial.print("Calibration Factor = "); Serial.println(calibrationValue, 3);
+        
+    EEPROM.put(eeAddress, calibInfoExist);                // Cal exist
+    eeAddress += sizeof(byte);
 
-    int write_eepromAdress = calVal_eepromAdress;
-    EEPROM.put(write_eepromAdress, 0x01);                 // Cal exist
-    read_eepromAdress += 0x01;
-    EEPROM.put(write_eepromAdress, calibrationOffset);    // New tare offest - uint32_t
-    read_eepromAdress += sizeof(uint32_t);
-    EEPROM.put(write_eepromAdress, newCalibrationValue);  // New Cal - float
+    EEPROM.put(eeAddress, offsetValue);                   // New offest - uint32_t
+    eeAddress += sizeof(uint32_t);
+    
+    EEPROM.put(eeAddress, calibrationValue);              // New Cal - float
+    eeAddress += sizeof(float);
+
 #if defined(ESP8266) || defined(ESP32)
     EEPROM.commit();
 #endif
-  
-    LoadCell.setTareOffset(calibrationOffset); 
-    LoadCell.setCalFactor(newCalibrationValue);
   }
 
-  read_eepromAdress += 0x01;
-  EEPROM.get(read_eepromAdress, calibrationOffset); // New tare offest - uint32_t 
-  read_eepromAdress += sizeof(uint32_t);
-  EEPROM.get(read_eepromAdress, calibrationValue);  // New Cal - float 
-  Serial.println("Read Offset = " + String(calibrationOffset));
-  Serial.println("Read Calibration Factor = " + String(calibrationValue));
-  LoadCell.setTareOffset(calibrationOffset);
+  eeAddress = 0;
+  EEPROM.get(eeAddress, calibInfoExist);      // Cal exist
+  // Serial.println(calibInfoExist);
+  eeAddress += sizeof(byte); 
+
+  EEPROM.get(eeAddress, offsetValue);         // New offest - uint32_t
+  // Serial.println(offsetValue);  
+  eeAddress += sizeof(uint32_t);
+  
+  EEPROM.get(eeAddress, calibrationValue);    // New New Cal - float
+  // Serial.println(calibrationValue, 3 );  
+  eeAddress += sizeof(float); 
+
+  Serial.print("Read Offset = "); Serial.println(offsetValue);
+  LoadCell.setTareOffset(offsetValue);
+  Serial.print("Read Calibration Factor = "); Serial.println(calibrationValue, 3 );
   LoadCell.setCalFactor(calibrationValue);
-  Serial.println("Startup is completed");
   
   while (!LoadCell.update());
   // Serial.print("Cal val: ");
@@ -156,7 +165,9 @@ calibrationOffset=0x112233;
     Serial.print("Sampling rate > spec!");//, check HX711 wiring and pin"); 
     SetErrorState();
   }
+  Serial.println("Startup is completed");
   delay(50);
+  lastTime = millis();
 }
 
 
@@ -165,7 +176,6 @@ void loop() {
   uint32_t colorArr[resolution];
 
   boolean newDataReady = false;
-  unsigned int serialPrintInterval = 1500; // increase value to slow down serial print activity
 
   // check for new data/start next conversion:
   if (LoadCell.update()) newDataReady = true;
@@ -175,7 +185,7 @@ void loop() {
   if (newDataReady) {
     if (millis() > lastTime + serialPrintInterval) {
       float weight = LoadCell.getData();
-      Serial.print("Weight: "); Serial.println(weight);
+      Serial.print("Weight: "); Serial.println(weight, 3);
       if (weight > weightThreashold) {
         origColor = redColor;
       } else {
@@ -190,7 +200,7 @@ void loop() {
 
   //rebuild color table
   if (statusChanged) {
-    Serial.println("Status C.");
+    Serial.println("Status Changed.");
 
     uint16_t curr_r, curr_g, curr_b; // separate into RGB components
     curr_b = origColor & 0x00FF;
