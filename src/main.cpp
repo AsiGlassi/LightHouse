@@ -2,7 +2,7 @@
 #include <Adafruit_NeoPixel.h>
 #include "HX711_ADC.h"
 #if defined(ESP8266) || defined(ESP32) || defined(AVR)
-// #include <EEPROM.h>
+#include <EEPROM.h>
 #endif
 #define debug false
 
@@ -32,14 +32,16 @@ uint32_t redColor = (0xAE0649);
 uint32_t greenColor = (0x33CC33);
 uint32_t errorColor = (0xAA0000);
 uint32_t origColor = (0x1AB2E7);
-uint32_t lastColor;
+uint32_t calP1Color = (0xFFFF00);
+uint32_t calP2Color = (0xFFFFAA);
+uint32_t lastColor = origColor;
 uint32_t colorArr[actualResolution];
 
 const int HX711_dout = 5; // mcu > HX711 dout pin, must be external interrupt capable!
 const int HX711_sck = 4;  // mcu > HX711 sck pin
 HX711_ADC LoadCell(HX711_dout, HX711_sck);
 unsigned long lastTime = 0;
-unsigned int serialPrintInterval = 750; // increase value to slow down serial print activity
+unsigned int serialPrintInterval = 1500; // increase value to slow down serial print activity
 boolean arrayLightyInitialized = false;
 
 // set all pixel to the same color
@@ -82,9 +84,76 @@ void setup() {
     Serial.println("Timeout!");//, check HX711 wiring and pin"); 
     SetErrorState();
   } else {
-	  Serial.print("Calibration Factor = "); Serial.println(calibrationValue, 3);
     LoadCell.setCalFactor(calibrationValue); // set calibration factor (float)
+    Serial.println("Startup is completed");
   }
+  
+  int eeAddress = 0;
+  byte calibInfoExist = 0x01;
+
+  //try to get calibration info from eprom
+#if defined(ESP8266) || defined(ESP32)
+  EEPROM.begin(512); 
+#endif
+  EEPROM.get(eeAddress, calibInfoExist);
+  Serial.print("calibInfoExist "); Serial.println(calibInfoExist); 
+  eeAddress += sizeof(byte);
+  if (calibInfoExist != 0x01) {
+
+    //Configuration Not Exist --> Set Cal Mode
+    strip.fill((strip.gamma32(calP1Color)));
+    Serial.println("No Data in EEPROM --> Calibration Starts, Remove load !");
+    delay(5000);
+
+    //Phase 1 - set to Zero
+    LoadCell.tareNoDelay(); // calculate the new tare / zero offset value (blocking)
+    offsetValue = LoadCell.getTareOffset(); // get the new tare / zero offset value
+
+    //Phaase 2 - measure 3kg weight
+    strip.fill(strip.gamma32(calP2Color));
+    Serial.println("Put a known Weight - 2kg !");
+    delay(5000);
+
+    //get the new calibration value
+    LoadCell.refreshDataSet();  //refresh the dataset to be sure that the known mass is measured correct
+    // calibrationValue = LoadCell.getNewCalibration(knownMass); 
+
+    //save data in eeprom
+    Serial.println("Writing new Data to EEPROM:");
+    Serial.print("Offset = "); Serial.println(offsetValue);
+    Serial.print("Calibration Factor = "); Serial.println(calibrationValue, 3);
+        
+    EEPROM.put(eeAddress, calibInfoExist);                // Cal exist
+    eeAddress += sizeof(byte);
+
+    EEPROM.put(eeAddress, offsetValue);                   // New offest - uint32_t
+    eeAddress += sizeof(uint32_t);
+    
+    EEPROM.put(eeAddress, calibrationValue);              // New Cal - float
+    eeAddress += sizeof(float);
+
+#if defined(ESP8266) || defined(ESP32)
+    EEPROM.commit();
+#endif
+  }
+
+  eeAddress = 0;
+  EEPROM.get(eeAddress, calibInfoExist);      // Cal exist
+  // Serial.println(calibInfoExist);
+  eeAddress += sizeof(byte); 
+
+  EEPROM.get(eeAddress, offsetValue);         // New offest - uint32_t
+  // Serial.println(offsetValue);  
+  eeAddress += sizeof(uint32_t);
+  
+  EEPROM.get(eeAddress, calibrationValue);    // New New Cal - float
+  // Serial.println(calibrationValue, 3 );  
+  eeAddress += sizeof(float); 
+
+  Serial.print("Read Offset = "); Serial.println(offsetValue);
+  LoadCell.setTareOffset(offsetValue);
+  Serial.print("Read Calibration Factor = "); Serial.println(calibrationValue, 3 );
+  LoadCell.setCalFactor(calibrationValue);
   
   while (!LoadCell.update());
   // Serial.print("Cal val: ");
