@@ -13,7 +13,7 @@ boolean inErrorState = false;
 
 const int ledPhaseBy = 30;
 const int ringLength = STRIPSIZE - 1;
-const int actualResolution = 180;
+const int actualResolution = 150;
 
 // #define LB2KG 0.45352
 const float knownMass = 2.0f;
@@ -248,5 +248,4 @@ void loop() {
       delay(20);
     }
   }
-  // Serial.println();
 }
