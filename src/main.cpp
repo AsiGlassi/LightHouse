@@ -14,6 +14,7 @@ boolean inErrorState = false;
 const int ledPhaseBy = 30;
 const int ringLength = STRIPSIZE - 1;
 const int actualResolution = 150;
+int ratio = 360/actualResolution;
 
 // #define LB2KG 0.45352
 const float knownMass = 2.0f;
@@ -105,6 +106,27 @@ void CalibrateAndSave() {
 }
 
 
+//Rebuild Array with new color
+void ChangeColor(uint32_t baseColor) {
+    Serial.print("Status Changed to: ");Serial.println(baseColor, HEX);
+
+    uint16_t curr_r, curr_g, curr_b; // separate into RGB components
+    curr_b = baseColor & 0x00FF;
+    curr_g = (baseColor >> 8) & 0x00FF;
+    curr_r = (baseColor >> 16) & 0x00FF;
+
+    // Set array with one cycle color
+    for (int indx = 0; indx < actualResolution; indx++) {
+      float sinRes = sin(((indx*ratio) - 90) * PI / 180);
+      if (sinRes < 0) {sinRes = 0;}
+      uint32_t newColor = (uint32_t)(sinRes * curr_b) + ((uint32_t)(sinRes * curr_g) << 8) + ((uint32_t)(sinRes * curr_r) << 16);
+      // Serial.print(indx); Serial.print(" "); Serial.println(newColor);
+      colorArr[indx] = newColor;
+    }
+    arrayLightyInitialized=true;
+}
+
+
 void setup() {
   Serial.begin(57600);
   Serial.println("Or Light House");
@@ -187,6 +209,7 @@ void loop() {
   // Serial.print(".");
   boolean newDataReady = false;
   boolean statusChanged = false;
+  static int stepIndx = 0;
 
   // check for new data/start next conversion:
   if (LoadCell.update()) newDataReady = true;
@@ -209,43 +232,27 @@ void loop() {
   }
 
   //rebuild color table
-  int ratio = 360/actualResolution;
   // Serial.println(ratio);
   if (statusChanged) {
-    Serial.println("Status Changed.");
-
-    uint16_t curr_r, curr_g, curr_b; // separate into RGB components
-    curr_b = origColor & 0x00FF;
-    curr_g = (origColor >> 8) & 0x00FF;
-    curr_r = (origColor >> 16) & 0x00FF;
-
-    // Set array with one cycle color
-    for (int indx = 0; indx < actualResolution; indx++) {
-      float sinRes = sin(((indx*ratio) - 90) * PI / 180);
-      if (sinRes < 0) {sinRes = 0;}
-      uint32_t newColor = (uint32_t)(sinRes * curr_b) + ((uint32_t)(sinRes * curr_g) << 8) + ((uint32_t)(sinRes * curr_r) << 16);
-      // Serial.print(indx); Serial.print(" "); Serial.println(newColor);
-      colorArr[indx] = newColor;
-    }
-    arrayLightyInitialized=true;
+    ChangeColor(origColor);
   }
 
   // Start lightning
   if (arrayLightyInitialized) {
-    Serial.print("Start lightning :"); Serial.println(origColor, HEX);
+    // Serial.println("Start lightning"); 
     strip.setPixelColor(STRIPSIZE-1, strip.gamma32(origColor));
-    for (int indx = 0; indx < actualResolution; indx=indx+1) {
-      int runningIndx = indx;
-      for (int led=0; led < STRIPSIZE-1; led++) {
-        uint32_t newColor = colorArr[runningIndx];
-        // Serial.print(runningIndx); Serial.print(" ");
-        strip.setPixelColor(led, strip.gamma32(newColor));
-        runningIndx += ledPhaseBy;
-        runningIndx = runningIndx % (actualResolution-1);
-      }
-      strip.show();
-      // Serial.println();
-      delay(20);
+      
+    int runningIndx = stepIndx;
+    for (int led=0; led < STRIPSIZE-1; led++) {
+      uint32_t newColor = colorArr[runningIndx];
+      // Serial.print(runningIndx); Serial.print(" ");
+      strip.setPixelColor(led, strip.gamma32(newColor));
+      runningIndx += ledPhaseBy;
+      runningIndx = runningIndx % (actualResolution-1);
     }
+    strip.show();
+    // Serial.println();
+    stepIndx=(++stepIndx % (actualResolution-1));
+    delay(20);
   }
 }
