@@ -41,7 +41,7 @@ const int HX711_dout = 5; // mcu > HX711 dout pin, must be external interrupt ca
 const int HX711_sck = 4;  // mcu > HX711 sck pin
 HX711_ADC LoadCell(HX711_dout, HX711_sck);
 unsigned long lastTime = 0;
-unsigned int serialPrintInterval = 1500; // increase value to slow down serial print activity
+unsigned int serialPrintInterval = 750; // increase value to slow down serial print activity
 boolean arrayLightyInitialized = false;
 
 // set all pixel to the same color
@@ -56,6 +56,54 @@ void SetErrorState () {
   delay(500);
   exit(-1);
 }
+
+
+//Calibrate celll and save claibration data
+void CalibrateAndSave() {
+
+    //Configuration Not Exist --> Set Cal Mode
+    strip.fill((strip.gamma32(calP1Color)));
+    strip.show();
+    Serial.println("No Data in EEPROM --> Calibration Starts, Remove load !");
+    delay(5000);
+
+    //Phase 1 - set to Zero
+    LoadCell.update();
+    // LoadCell.tareNoDelay(); // calculate the new tare / zero offset value (blocking)
+    LoadCell.tare(); // calculate the new tare / zero offset value (blocking)
+    long offsetValue = LoadCell.getTareOffset(); // get the new tare / zero offset value
+    while (LoadCell.getTareStatus() != true);
+
+    //Phaase 2 - measure 3kg weight
+    strip.fill(strip.gamma32(calP2Color));
+    strip.show();
+    Serial.println("Put a known Weight - 2kg !");
+    delay(5000);
+
+    //get the new calibration value
+    LoadCell.refreshDataSet();  //refresh the dataset to be sure that the known mass is measured correct
+    float calibrationValue = LoadCell.getNewCalibration(knownMass); 
+
+    //save data in eeprom
+    Serial.println("Writing new Data to EEPROM:");
+    Serial.print("Offset = "); Serial.println(offsetValue);
+    Serial.print("Calibration Factor = "); Serial.println(calibrationValue, 3);
+        
+    int eeAddress = 0;
+    EEPROM.put(eeAddress, 0x01);                // Cal exist
+    eeAddress += sizeof(byte);
+
+    EEPROM.put(eeAddress, offsetValue);                   // New offest - uint32_t
+    eeAddress += sizeof(uint32_t);
+    
+    EEPROM.put(eeAddress, calibrationValue);              // New Cal - float
+    eeAddress += sizeof(float);
+
+#if defined(ESP8266) || defined(ESP32)
+    EEPROM.commit();
+#endif
+}
+
 
 void setup() {
   Serial.begin(57600);
@@ -74,18 +122,14 @@ void setup() {
   long offsetValue = 8373663;
 
   LoadCell.begin();
-
   Serial.print("Offset = "); Serial.println(offsetValue);
   LoadCell.setTareOffset(offsetValue);
   //LoadCell.setReverseOutput();
   unsigned long stabilizingtime = 1000; // tare preciscion can be improved by adding a few seconds of stabilizing time
   LoadCell.start(stabilizingtime, false);
   if (LoadCell.getTareTimeoutFlag() || LoadCell.getSignalTimeoutFlag()) {
-    Serial.println("Timeout!");//, check HX711 wiring and pin"); 
+    Serial.println("Load Cell Error, Check HX711 wiring and pin!"); 
     SetErrorState();
-  } else {
-    LoadCell.setCalFactor(calibrationValue); // set calibration factor (float)
-    Serial.println("Startup is completed");
   }
   
   int eeAddress = 0;
@@ -97,57 +141,17 @@ void setup() {
 #endif
   EEPROM.get(eeAddress, calibInfoExist);
   Serial.print("calibInfoExist "); Serial.println(calibInfoExist); 
-  eeAddress += sizeof(byte);
   if (calibInfoExist != 0x01) {
 
-    //Configuration Not Exist --> Set Cal Mode
-    strip.fill((strip.gamma32(calP1Color)));
-    Serial.println("No Data in EEPROM --> Calibration Starts, Remove load !");
-    delay(5000);
-
-    //Phase 1 - set to Zero
-    LoadCell.tareNoDelay(); // calculate the new tare / zero offset value (blocking)
-    offsetValue = LoadCell.getTareOffset(); // get the new tare / zero offset value
-
-    //Phaase 2 - measure 3kg weight
-    strip.fill(strip.gamma32(calP2Color));
-    Serial.println("Put a known Weight - 2kg !");
-    delay(5000);
-
-    //get the new calibration value
-    LoadCell.refreshDataSet();  //refresh the dataset to be sure that the known mass is measured correct
-    // calibrationValue = LoadCell.getNewCalibration(knownMass); 
-
-    //save data in eeprom
-    Serial.println("Writing new Data to EEPROM:");
-    Serial.print("Offset = "); Serial.println(offsetValue);
-    Serial.print("Calibration Factor = "); Serial.println(calibrationValue, 3);
-        
-    EEPROM.put(eeAddress, calibInfoExist);                // Cal exist
-    eeAddress += sizeof(byte);
-
-    EEPROM.put(eeAddress, offsetValue);                   // New offest - uint32_t
-    eeAddress += sizeof(uint32_t);
-    
-    EEPROM.put(eeAddress, calibrationValue);              // New Cal - float
-    eeAddress += sizeof(float);
-
-#if defined(ESP8266) || defined(ESP32)
-    EEPROM.commit();
-#endif
+    CalibrateAndSave();
   }
 
-  eeAddress = 0;
-  EEPROM.get(eeAddress, calibInfoExist);      // Cal exist
-  // Serial.println(calibInfoExist);
+  //Get values from Eprom
   eeAddress += sizeof(byte); 
-
   EEPROM.get(eeAddress, offsetValue);         // New offest - uint32_t
-  // Serial.println(offsetValue);  
   eeAddress += sizeof(uint32_t);
   
   EEPROM.get(eeAddress, calibrationValue);    // New New Cal - float
-  // Serial.println(calibrationValue, 3 );  
   eeAddress += sizeof(float); 
 
   Serial.print("Read Offset = "); Serial.println(offsetValue);
@@ -241,7 +245,7 @@ void loop() {
       }
       strip.show();
       // Serial.println();
-      delay(25);
+      delay(20);
     }
   }
   // Serial.println();
